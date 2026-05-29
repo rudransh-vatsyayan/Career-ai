@@ -31,11 +31,17 @@ export default function RoadmapPage() {
       const categoryBenchmarks = categoryBenchmarksText ? JSON.parse(categoryBenchmarksText) : null;
 
       const profileText = localStorage.getItem("userProfile");
-       const userProfileParsed = profileText ? JSON.parse(profileText) : null;
-       setUserProfile(userProfileParsed);
+      const userProfileParsed = profileText ? JSON.parse(profileText) : null;
+      setUserProfile(userProfileParsed);
 
       const skillsText = localStorage.getItem("userSkills");
       const userSkills = skillsText ? JSON.parse(skillsText) : [];
+
+      const collegeRankingsText = localStorage.getItem("collegeRankings");
+      const collegeRankings = collegeRankingsText ? JSON.parse(collegeRankingsText) : null;
+
+      const skillAnalysisText = localStorage.getItem("skillAnalysis");
+      const skillAnalysis = skillAnalysisText ? JSON.parse(skillAnalysisText) : null;
 
       // Load saved completed steps for this specific college
       const savedProgress = localStorage.getItem(`progress_${data.name}`);
@@ -47,7 +53,7 @@ export default function RoadmapPage() {
         }
       }, 0);
 
-      // Call API
+      // Call API with placement data
       fetch("/api/roadmap", {
         method: "POST",
         headers: {
@@ -57,21 +63,28 @@ export default function RoadmapPage() {
           collegeName: data.name,
           grades: data.grades,
           categoryBenchmarks: categoryBenchmarks,
-          userProfile: userProfile,
-          userSkills: userSkills
+          userProfile: userProfileParsed,
+          userSkills: userSkills,
+          collegeRankings: collegeRankings,
+          skillAnalysis: skillAnalysis
         })
       })
         .then(res => {
-          if (!res.ok) throw new Error("Server responded with error generating roadmap");
+          if (!res.ok) {
+            return res.json().then(errData => {
+              throw new Error(errData.error || "Server responded with error generating roadmap");
+            });
+          }
           return res.json();
         })
         .then(json => {
+          console.log("Roadmap received:", json);
           setRoadmap(json);
           setLoading(false);
         })
         .catch(err => {
           console.error("API error:", err);
-          setError("Failed to connect to Gemini AI server. Please verify your internet connection and API key config.");
+          setError(`Failed to generate roadmap: ${err.message}`);
           setLoading(false);
         });
     } catch (e) {
@@ -107,7 +120,7 @@ export default function RoadmapPage() {
           🧠 AI Engine Generating Upskilling Track...
         </h2>
         <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem" }}>
-          Analyzing institutional deficits, mapping missing skills from database, and structuring phases.
+          Analyzing institutional deficits, placement data, and mapping personalized skills roadmap.
         </p>
       </div>
     );
@@ -122,6 +135,23 @@ export default function RoadmapPage() {
         </h2>
         <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem", marginBottom: "2rem" }}>
           {error}
+        </p>
+        <Link href="/" className="btn-upload" style={{ textDecoration: "none" }}>
+          ⬅️ Back to Dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  if (!roadmap || !roadmap.steps) {
+    return (
+      <div className="glass-panel" style={{ textAlign: "center", padding: "4rem" }}>
+        <span style={{ fontSize: "3rem" }}>❌</span>
+        <h2 style={{ fontSize: "1.5rem", fontWeight: "700", marginTop: "1rem" }}>
+          No Roadmap Data
+        </h2>
+        <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem", marginBottom: "2rem" }}>
+          The AI response was invalid or empty. Please try again.
         </p>
         <Link href="/" className="btn-upload" style={{ textDecoration: "none" }}>
           ⬅️ Back to Dashboard
@@ -158,6 +188,13 @@ export default function RoadmapPage() {
           <p style={{ fontSize: "1.15rem", color: "var(--text-primary)", lineHeight: "1.8", opacity: 0.9 }}>
             {roadmap?.deficitSummary}
           </p>
+          {roadmap?.placementStrategy && (
+            <div style={{ marginTop: "1.5rem", padding: "1rem", background: "rgba(76, 175, 80, 0.08)", borderRadius: "8px", borderLeft: "3px solid var(--accent-success)" }}>
+              <p style={{ fontSize: "0.95rem", color: "var(--text-secondary)", margin: 0 }}>
+                <strong>📊 Placement Strategy:</strong> {roadmap.placementStrategy}
+              </p>
+            </div>
+          )}
         </section>
 
         {/* Tactical Execution Progress */}
@@ -178,7 +215,7 @@ export default function RoadmapPage() {
         <div className="professional-timeline" style={{ position: "relative", paddingLeft: "3.5rem" }}>
           <div style={{ position: "absolute", left: "15px", top: 0, bottom: 0, width: "2px", background: "linear-gradient(to bottom, var(--brand-primary), var(--bg-main))", opacity: 0.3 }}></div>
           
-          {roadmap?.steps?.map((step) => {
+          {roadmap.steps.map((step) => {
             const isDone = !!completedSteps[step.id];
             return (
               <div key={step.id} className="timeline-segment" style={{ position: "relative", marginBottom: "4rem" }}>
@@ -217,11 +254,19 @@ export default function RoadmapPage() {
                   </div>
                   
                   <p style={{ color: "var(--text-secondary)", fontSize: "1.05rem", lineHeight: "1.7", marginBottom: "2rem" }}>{step.description}</p>
+
+                  {step.placementRelevance && (
+                    <div style={{ marginBottom: "1.5rem", padding: "0.75rem", background: "rgba(76, 175, 80, 0.08)", borderRadius: "6px", borderLeft: "2px solid var(--accent-success)" }}>
+                      <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: 0 }}>
+                        <strong>📈 Placement Relevance:</strong> {step.placementRelevance}
+                      </p>
+                    </div>
+                  )}
                   
                   {step.skills && (
                     <div className="skill-matrix-mini" style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
                       {step.skills.map(skill => (
-                        <span key={skill} style={{ padding: "0.5rem 1rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", fontSize: "0.85rem", fontWeight: 600, color: "white" }}>
+                        <span key={skill} style={{ padding: "0.5rem 1rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", fontSize: "0.85rem" }}>
                           #{skill}
                         </span>
                       ))}
