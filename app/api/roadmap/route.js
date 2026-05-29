@@ -7,6 +7,10 @@ import {
   buildBenchmarkComparison,
   getCollegeBenchmarkDataset,
 } from "@/lib/collegeBenchmarks";
+import dotenv from "dotenv";
+
+// Load environment variables from .env file
+dotenv.config();
 
 export const runtime = "nodejs";
 
@@ -224,6 +228,7 @@ export async function POST(request) {
       skillAnalysis,
     });
 
+    console.log("GROQ_API_KEY check:", process.env.GROQ_API_KEY ? "Present" : "Missing");
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) {
       return NextResponse.json(

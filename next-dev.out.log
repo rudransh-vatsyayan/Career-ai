@@ -12,3 +12,4 @@
  GET / 200 in 185ms (next.js: 62ms, application-code: 123ms)
  GET /api/placement-data 200 in 20ms (next.js: 16ms, application-code: 4ms)
  GET /api/college-benchmarks 200 in 5ms (next.js: 1762µs, application-code: 3ms)
+  Reload env: .env
