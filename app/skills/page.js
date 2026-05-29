@@ -1,7 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Layers3,
+  Search,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 
 export default function SkillsPage() {
   const router = useRouter();
@@ -10,37 +20,35 @@ export default function SkillsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
+  const [collegeData, setCollegeData] = useState(null);
   const [skillAnalysis, setSkillAnalysis] = useState(null);
-  const [recommendedSkills, setRecommendedSkills] = useState([]);
 
   useEffect(() => {
-    // Load user profile and skill analysis from localStorage
-    const profile = JSON.parse(localStorage.getItem("userProfile") || "{}");
-    const analysis = JSON.parse(localStorage.getItem("skillAnalysis") || "null");
-    const saved = localStorage.getItem("userSkills");
-    
-    setUserProfile(profile);
-    setSkillAnalysis(analysis);
-    
-    if (saved) {
-      try {
-        setSelectedSkills(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to parse saved skills", e);
-      }
-    }
+    setTimeout(() => {
+      const profile = JSON.parse(localStorage.getItem("userProfile") || "null");
+      const analysis = JSON.parse(localStorage.getItem("skillAnalysis") || "null");
+      const selection = JSON.parse(localStorage.getItem("roadmapSelection") || "null");
+
+      setUserProfile(profile);
+      setSkillAnalysis(analysis);
+      setCollegeData(selection);
+      setSelectedSkills([]);
+      localStorage.removeItem("userSkills");
+    }, 0);
 
     fetch("/technical_skills.csv")
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load skills dataset");
-        return res.text();
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load skills dataset");
+        return response.text();
       })
       .then((text) => {
         const lines = text.split(/\r?\n/);
         const parsed = [];
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
+
+        for (let index = 1; index < lines.length; index += 1) {
+          const line = lines[index].trim();
           if (!line) continue;
+
           const parts = line.split(",");
           if (parts.length >= 3) {
             parsed.push({
@@ -50,38 +58,44 @@ export default function SkillsPage() {
             });
           }
         }
+
         setSkills(parsed);
-        
-        // Set recommended skills based on analysis
-        if (analysis && analysis.avgSkillsPlaced) {
-          const recommendCount = Math.ceil(parseFloat(analysis.avgSkillsPlaced));
-          const recommended = parsed.slice(0, recommendCount).map(s => s.name);
-          setRecommendedSkills(recommended);
-          
-          // Auto-select recommended skills if none selected yet
-          if (!saved) {
-            setSelectedSkills(recommended);
-            localStorage.setItem("userSkills", JSON.stringify(recommended));
-          }
-        }
-        
         setLoading(false);
       })
-      .catch((err) => {
-        console.error("Error fetching skills:", err);
+      .catch((error) => {
+        console.error("Error fetching skills:", error);
         setLoading(false);
       });
   }, []);
 
+  const filteredSkills = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return skills;
+
+    return skills.filter(
+      (skill) =>
+        skill.name.toLowerCase().includes(query) ||
+        skill.category.toLowerCase().includes(query)
+    );
+  }, [searchQuery, skills]);
+
+  const categoriesMap = useMemo(() => {
+    return filteredSkills.reduce((map, skill) => {
+      if (!map[skill.category]) map[skill.category] = [];
+      map[skill.category].push(skill);
+      return map;
+    }, {});
+  }, [filteredSkills]);
+
+  const categories = Object.keys(categoriesMap).sort();
+  const requiredContextReady = !!userProfile && !!collegeData;
+
   const toggleSkill = (skillName) => {
-    let newSelection;
-    if (selectedSkills.includes(skillName)) {
-      newSelection = selectedSkills.filter(s => s !== skillName);
-    } else {
-      newSelection = [...selectedSkills, skillName];
-    }
-    setSelectedSkills(newSelection);
-    localStorage.setItem("userSkills", JSON.stringify(newSelection));
+    setSelectedSkills((current) =>
+      current.includes(skillName)
+        ? current.filter((skill) => skill !== skillName)
+        : [...current, skillName]
+    );
   };
 
   const clearSelection = () => {
@@ -92,162 +106,183 @@ export default function SkillsPage() {
   const handleContinueToRoadmap = () => {
     const updatedProfile = { ...userProfile, selectedSkills };
     localStorage.setItem("userProfile", JSON.stringify(updatedProfile));
+    localStorage.setItem("userSkills", JSON.stringify(selectedSkills));
     router.push("/roadmap");
   };
 
-  // Filter skills based on search query
-  const filteredSkills = skills.filter(
-    (skill) =>
-      skill.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      skill.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  // Group by category
-  const categoriesMap = {};
-  filteredSkills.forEach((skill) => {
-    if (!categoriesMap[skill.category]) {
-      categoriesMap[skill.category] = [];
-    }
-    categoriesMap[skill.category].push(skill);
-  });
-
-  const categories = Object.keys(categoriesMap).sort();
-
   if (loading) {
     return (
-      <div className="loading-screen" style={{ height: "100vh", display: "flex", justifyContent: "center", alignItems: "center", background: "var(--bg-gradient)" }}>
-        <div className="spinner"></div>
+      <div className="workspace-page centered-state">
+        <div>
+          <div className="spinner"></div>
+          <h2>Loading skill taxonomy</h2>
+          <p>Preparing the list of selectable skills.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!requiredContextReady) {
+    return (
+      <div className="workspace-page centered-state">
+        <div className="empty-state-inner">
+          <Layers3 size={36} />
+          <h2>Profile setup is missing</h2>
+          <p>Start from the benchmark page so the roadmap has college, branch, role, and graduation year context.</p>
+          <Link href="/" className="btn btn-primary" style={{ marginTop: 18 }}>
+            <ArrowLeft size={18} />
+            Back to benchmark setup
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="dashboard-container animate-in">
-      <header className="page-hero" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+    <div className="workspace-page">
+      <header className="page-header">
         <div>
-          <h1 className="hero-title">Skill Matrix</h1>
-          <p className="hero-subtitle">
-            {skillAnalysis 
-              ? `Based on placement data, ${Math.ceil(parseFloat(skillAnalysis.avgSkillsPlaced))} skills helped successful graduates in your target role.`
-              : "Catalog your technical stack to allow the AI to architect a complementary learning path."
-            }
+          <span className="eyebrow">
+            <Sparkles size={16} />
+            Skill inventory
+          </span>
+          <h1>Select only the skills you already have.</h1>
+          <p>
+            Nothing is auto-selected. Leave this page empty if you want the roadmap to treat you as starting from scratch.
           </p>
         </div>
-        {selectedSkills.length > 0 && (
-          <div style={{ textAlign: "right", paddingBottom: "1rem" }}>
-            <div className="status-badge" style={{ marginBottom: "0.75rem" }}>
-              {selectedSkills.length} COMPETENCIES IDENTIFIED
-            </div>
-            <button 
-              onClick={handleContinueToRoadmap} 
-              className="btn-primary" 
-              style={{ width: "auto", margin: 0, padding: "0.5rem 1.25rem", marginRight: "0.5rem" }}
-            >
-              Generate Roadmap 🚀
-            </button>
-            <button 
-              onClick={clearSelection} 
-              className="btn-reset" 
-              style={{ width: "auto", margin: 0, padding: "0.5rem 1.25rem", color: "var(--accent-error)", borderColor: "rgba(239, 68, 68, 0.2)" }}
-            >
-              Reset Taxonomy
-            </button>
-          </div>
-        )}
+        <Link href="/" className="btn btn-secondary">
+          <ArrowLeft size={18} />
+          Benchmark setup
+        </Link>
       </header>
 
-      <section className="glass-panel" style={{ padding: "1.75rem", marginBottom: "3rem" }}>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Global Taxonomy Search</label>
-          <input
-            type="text"
-            className="search-bar"
-            placeholder="Search competencies (e.g. Distributed Systems, Neural Networks, React)..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ background: "rgba(0,0,0,0.2)" }}
-          />
-        </div>
-      </section>
-
-      {/* Info Panel */}
-      {skillAnalysis && (
-        <section className="glass-panel" style={{ padding: "1.5rem", marginBottom: "2rem", background: "rgba(76, 175, 80, 0.08)", borderLeft: "4px solid var(--accent-success)" }}>
-          <h3 style={{ marginBottom: "0.75rem" }}>📊 Placement Insights for {userProfile?.interestedRole}</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "1rem" }}>
+      <div className="skills-layout">
+        <aside className="panel side-panel">
+          <div className="section-title">
+            <Layers3 size={22} />
             <div>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Placement Rate</p>
-              <p style={{ fontSize: "1.5rem", fontWeight: "bold", color: "var(--accent-success)" }}>
-                {skillAnalysis.placementRate?.toFixed(1)}%
-              </p>
-            </div>
-            <div>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Avg Skills (Placed)</p>
-              <p style={{ fontSize: "1.5rem", fontWeight: "bold", color: "var(--accent-success)" }}>
-                {skillAnalysis.avgSkillsPlaced}
-              </p>
-            </div>
-            <div>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Avg Package</p>
-              <p style={{ fontSize: "1.5rem", fontWeight: "bold", color: "var(--accent-success)" }}>
-                ₹{skillAnalysis.avgPackagePlaced} LPA
-              </p>
+              <h2>Current context</h2>
+              <p>Used by the roadmap prompt.</p>
             </div>
           </div>
-        </section>
-      )}
 
-      {categories.length === 0 ? (
-        <div className="glass-panel" style={{ textAlign: "center", padding: "5rem" }}>
-          <p style={{ color: "var(--text-muted)", fontSize: "1.1rem" }}>No competencies matched your current query criteria.</p>
-        </div>
-      ) : (
-        <div className="category-matrix" style={{ marginTop: 0 }}>
-          {categories.map((catName) => {
-            const list = categoriesMap[catName];
-            return (
-              <div key={catName} className="glass-panel" style={{ padding: "2rem" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "1rem" }}>
-                  <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--text-primary)" }}>{catName}</h3>
-                  <span className="status-badge" style={{ fontSize: "0.7rem", padding: "0.2rem 0.6rem", background: "rgba(255,255,255,0.03)", color: "var(--text-secondary)", border: "1px solid var(--border-subtle)" }}>
-                    {list.length} Skills
-                  </span>
+          <div className="profile-summary">
+            <div className="summary-line">
+              <span>Institution</span>
+              <strong>{collegeData?.name}</strong>
+            </div>
+            <div className="summary-line">
+              <span>Branch</span>
+              <strong>{userProfile?.branch}</strong>
+            </div>
+            <div className="summary-line">
+              <span>Role</span>
+              <strong>{userProfile?.interestedRole}</strong>
+            </div>
+            <div className="summary-line">
+              <span>Graduation</span>
+              <strong>{userProfile?.graduationYear}</strong>
+            </div>
+          </div>
+
+          {skillAnalysis && (
+            <div className="metric-card" style={{ marginBottom: 18 }}>
+              <span>Placement skill average</span>
+              <strong>{skillAnalysis.avgSkillsPlaced || "-"}</strong>
+            </div>
+          )}
+
+          <div className="section-title" style={{ marginBottom: 12 }}>
+            <Check size={20} />
+            <div>
+              <h2>{selectedSkills.length} selected</h2>
+              <p>These are treated as acquired skills.</p>
+            </div>
+          </div>
+
+          {selectedSkills.length > 0 ? (
+            <div className="selected-skill-list" style={{ marginBottom: 18 }}>
+              {selectedSkills.map((skill) => (
+                <span key={skill} className="selected-skill">
+                  <Check size={14} />
+                  {skill}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state-inner" style={{ marginBottom: 18 }}>
+              <p style={{ color: "var(--text-muted)" }}>No acquired skills selected.</p>
+            </div>
+          )}
+
+          <div className="btn-row">
+            <button className="btn btn-primary" onClick={handleContinueToRoadmap}>
+              Generate roadmap
+              <ArrowRight size={18} />
+            </button>
+            <button className="btn btn-secondary" onClick={clearSelection} disabled={selectedSkills.length === 0}>
+              <Trash2 size={17} />
+              Clear
+            </button>
+          </div>
+        </aside>
+
+        <main className="library-panel">
+          <section className="panel panel-tight">
+            <div className="field" style={{ gap: 0 }}>
+              <label htmlFor="skillSearch">Search skills</label>
+              <div className="input-shell" style={{ marginTop: 8 }}>
+                <Search size={17} />
+                <input
+                  id="skillSearch"
+                  className="control"
+                  type="text"
+                  placeholder="Search by skill or category"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
+              </div>
+            </div>
+          </section>
+
+          {categories.length === 0 ? (
+            <section className="panel empty-state">
+              <div className="empty-state-inner">
+                <Search size={34} />
+                <h3>No skills matched</h3>
+                <p>Try a broader search term.</p>
+              </div>
+            </section>
+          ) : (
+            categories.map((category) => (
+              <section key={category} className="category-section">
+                <div className="category-section-header">
+                  <h3>{category}</h3>
+                  <span className="status-pill">{categoriesMap[category].length} skills</span>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-                  {list.map((skill) => {
+                <div className="skill-grid">
+                  {categoriesMap[category].map((skill) => {
                     const isSelected = selectedSkills.includes(skill.name);
-                    const isRecommended = recommendedSkills.includes(skill.name);
+
                     return (
-                      <div 
-                        key={skill.id} 
+                      <button
+                        key={skill.id}
+                        type="button"
+                        className={`skill-button ${isSelected ? "is-selected" : ""}`}
                         onClick={() => toggleSkill(skill.name)}
-                        style={{ 
-                          cursor: "pointer",
-                          padding: "0.5rem 1rem",
-                          borderRadius: "10px",
-                          fontSize: "0.9rem",
-                          fontWeight: 600,
-                          border: isSelected ? "1px solid var(--brand-primary)" : isRecommended ? "1px solid var(--accent-success)" : "1px solid var(--border-subtle)",
-                          background: isSelected ? "var(--brand-glow)" : isRecommended ? "rgba(76, 175, 80, 0.08)" : "rgba(255,255,255,0.02)",
-                          color: isSelected ? "var(--brand-primary)" : "var(--text-secondary)",
-                          transition: "var(--transition-smooth)",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.5rem"
-                        }}
                       >
-                        {isSelected && <span style={{ fontSize: "1rem" }}>✓</span>}
+                        {isSelected && <Check size={14} />}
                         {skill.name}
-                        {isRecommended && <span style={{ fontSize: "0.75rem" }}>⭐</span>}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+              </section>
+            ))
+          )}
+        </main>
+      </div>
     </div>
   );
 }

@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { ArrowLeft, CheckCircle2, Circle, ClipboardList, FileDown, Gauge, Target } from "lucide-react";
 
 export default function RoadmapPage() {
-  const router = useRouter();
   const [collegeData, setCollegeData] = useState(null);
   const [roadmap, setRoadmap] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -13,12 +12,11 @@ export default function RoadmapPage() {
   const [completedSteps, setCompletedSteps] = useState({});
   const [userProfile, setUserProfile] = useState(null);
 
-  // 1. Load selection from localStorage and fetch roadmap
   useEffect(() => {
     const selectionText = localStorage.getItem("roadmapSelection");
     if (!selectionText) {
       setTimeout(() => {
-        setError("No college selected. Please return to the Dashboard first.");
+        setError("No institution was selected. Start from the benchmark setup page.");
         setLoading(false);
       }, 0);
       return;
@@ -26,58 +24,58 @@ export default function RoadmapPage() {
 
     try {
       const data = JSON.parse(selectionText);
-      
       const categoryBenchmarksText = localStorage.getItem("categoryBenchmarks");
       const categoryBenchmarks = categoryBenchmarksText ? JSON.parse(categoryBenchmarksText) : null;
-
       const profileText = localStorage.getItem("userProfile");
-       const userProfileParsed = profileText ? JSON.parse(profileText) : null;
-       setUserProfile(userProfileParsed);
-
+      const userProfileParsed = profileText ? JSON.parse(profileText) : null;
       const skillsText = localStorage.getItem("userSkills");
       const userSkills = skillsText ? JSON.parse(skillsText) : [];
-
-      // Load saved completed steps for this specific college
+      const collegeRankingsText = localStorage.getItem("collegeRankings");
+      const collegeRankings = collegeRankingsText ? JSON.parse(collegeRankingsText) : [];
+      const skillAnalysisText = localStorage.getItem("skillAnalysis");
+      const skillAnalysis = skillAnalysisText ? JSON.parse(skillAnalysisText) : null;
       const savedProgress = localStorage.getItem(`progress_${data.name}`);
 
       setTimeout(() => {
+        setUserProfile(userProfileParsed);
         setCollegeData(data);
         if (savedProgress) {
           setCompletedSteps(JSON.parse(savedProgress));
         }
       }, 0);
 
-      // Call API
       fetch("/api/roadmap", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           collegeName: data.name,
           grades: data.grades,
-          categoryBenchmarks: categoryBenchmarks,
-          userProfile: userProfile,
-          userSkills: userSkills
-        })
+          categoryBenchmarks,
+          userProfile: userProfileParsed,
+          userSkills,
+          collegeRankings,
+          skillAnalysis,
+        }),
       })
-        .then(res => {
-          if (!res.ok) throw new Error("Server responded with error generating roadmap");
-          return res.json();
+        .then((response) => {
+          if (!response.ok) throw new Error("Server responded with error generating roadmap");
+          return response.json();
         })
-        .then(json => {
+        .then((json) => {
           setRoadmap(json);
           setLoading(false);
         })
-        .catch(err => {
-          console.error("API error:", err);
-          setError("Failed to connect to Gemini AI server. Please verify your internet connection and API key config.");
+        .catch((apiError) => {
+          console.error("API error:", apiError);
+          setError("Failed to generate roadmap. Verify the Groq API key and network connection.");
           setLoading(false);
         });
-    } catch (e) {
-      console.error(e);
+    } catch (parseError) {
+      console.error(parseError);
       setTimeout(() => {
-        setError("Invalid college selection data.");
+        setError("Invalid roadmap setup data. Start again from benchmark setup.");
         setLoading(false);
       }, 0);
     }
@@ -85,159 +83,181 @@ export default function RoadmapPage() {
 
   const handleToggleStep = (stepId) => {
     if (!collegeData) return;
+
     const newProgress = {
       ...completedSteps,
-      [stepId]: !completedSteps[stepId]
+      [stepId]: !completedSteps[stepId],
     };
+
     setCompletedSteps(newProgress);
     localStorage.setItem(`progress_${collegeData.name}`, JSON.stringify(newProgress));
   };
 
-  const getCompletionPercentage = () => {
-    if (!roadmap || !roadmap.steps || roadmap.steps.length === 0) return 0;
+  const completionRate = (() => {
+    if (!roadmap?.steps?.length) return 0;
     const completedCount = Object.values(completedSteps).filter(Boolean).length;
     return Math.round((completedCount / roadmap.steps.length) * 100);
-  };
+  })();
 
   if (loading) {
     return (
-      <div className="glass-panel" style={{ textAlign: "center", padding: "5rem" }}>
-        <div className="spinner"></div>
-        <h2 style={{ fontSize: "1.5rem", fontWeight: "700", marginTop: "1.5rem" }}>
-          🧠 AI Engine Generating Upskilling Track...
-        </h2>
-        <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem" }}>
-          Analyzing institutional deficits, mapping missing skills from database, and structuring phases.
-        </p>
+      <div className="workspace-page centered-state">
+        <div>
+          <div className="spinner"></div>
+          <h2>Generating semester roadmap</h2>
+          <p>Comparing acquired skills, placement signals, and college benchmark gaps.</p>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="glass-panel" style={{ textAlign: "center", padding: "4rem" }}>
-        <span style={{ fontSize: "3rem" }}>⚠️</span>
-        <h2 style={{ fontSize: "1.5rem", fontWeight: "700", marginTop: "1rem", color: "var(--accent-rose)" }}>
-          Generation Failed
-        </h2>
-        <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem", marginBottom: "2rem" }}>
-          {error}
-        </p>
-        <Link href="/" className="btn-upload" style={{ textDecoration: "none" }}>
-          ⬅️ Back to Dashboard
-        </Link>
+      <div className="workspace-page centered-state">
+        <div className="empty-state-inner">
+          <Circle size={36} />
+          <h2>Roadmap generation failed</h2>
+          <p>{error}</p>
+          <Link href="/" className="btn btn-primary" style={{ marginTop: 18 }}>
+            <ArrowLeft size={18} />
+            Back to benchmark setup
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const completionRate = getCompletionPercentage();
-
   return (
-    <div className="dashboard-container animate-in">
-      <header className="page-hero">
-        <div style={{ marginBottom: "1.5rem" }}>
-          <Link href="/" className="status-badge" style={{ textDecoration: "none" }}>
-            ← Return to Benchmarking
-          </Link>
+    <div className="workspace-page roadmap-wrap">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">
+            <Target size={16} />
+            Semester roadmap
+          </span>
+          <h1>{collegeData?.name} to {userProfile?.interestedRole}</h1>
+          <p>
+            Graduation year {userProfile?.graduationYear}. The plan compares selected acquired skills with the benchmark workbook and placement data.
+          </p>
         </div>
-        <h1 className="hero-title">Career Execution Plan</h1>
-        <p className="hero-subtitle">
-          Strategic upskilling roadmap for <strong>{collegeData?.name}</strong> targeting <strong>{userProfile?.interestedRole}</strong>.
-        </p>
+        <Link href="/skills" className="btn btn-secondary">
+          <ArrowLeft size={18} />
+          Skill inventory
+        </Link>
       </header>
 
-      <div className="roadmap-content" style={{ maxWidth: "900px" }}>
-        {/* Strategy Executive Summary */}
-        <section className="glass-panel" style={{ borderLeft: "6px solid var(--brand-primary)", marginBottom: "3.5rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
-            <h2 className="panel-title" style={{ margin: 0 }}>
-              <span>💡</span> Strategic Assessment
-            </h2>
-            <div className="status-badge">{roadmap?.strategyType}</div>
+      <section className="panel strategy-panel">
+        <div className="section-title">
+          <Gauge size={22} />
+          <div>
+            <h2>{roadmap?.strategyType}</h2>
+            <p>{roadmap?.matchedCollege ? `Matched benchmark college: ${roadmap.matchedCollege}` : "Generated from selected benchmark data."}</p>
           </div>
-          <p style={{ fontSize: "1.15rem", color: "var(--text-primary)", lineHeight: "1.8", opacity: 0.9 }}>
-            {roadmap?.deficitSummary}
-          </p>
-        </section>
+        </div>
 
-        {/* Tactical Execution Progress */}
-        <section className="glass-panel" style={{ padding: "2rem", marginBottom: "3.5rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem", alignItems: "flex-end" }}>
-            <div>
-              <p style={{ fontSize: "0.75rem", fontWeight: 800, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Milestone Progress</p>
-              <h3 style={{ fontSize: "1.5rem", fontWeight: 700 }}>Execution Phase Completion</h3>
+        <div className="strategy-grid">
+          <div>
+            <p style={{ color: "var(--text-secondary)" }}>{roadmap?.deficitSummary}</p>
+            {roadmap?.placementStrategy && (
+              <div className="note-box" style={{ marginTop: 14 }}>
+                {roadmap.placementStrategy}
+              </div>
+            )}
+          </div>
+          <div className="roadmap-progress">
+            <strong>{completionRate}%</strong>
+            <span>completion</span>
+            <div className="progress-track" style={{ marginTop: 12 }}>
+              <div className="progress-fill" style={{ width: `${completionRate}%` }}></div>
             </div>
-            <span style={{ fontSize: "2rem", fontWeight: 800, color: "var(--brand-primary)" }}>{completionRate}%</span>
           </div>
-          <div className="progress-track" style={{ height: "14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-subtle)" }}>
-            <div className="progress-fill" style={{ width: `${completionRate}%`, background: "linear-gradient(90deg, var(--brand-primary), var(--brand-secondary))" }}></div>
-          </div>
-        </section>
+        </div>
+      </section>
 
-        {/* Sequential Timeline */}
-        <div className="professional-timeline" style={{ position: "relative", paddingLeft: "3.5rem" }}>
-          <div style={{ position: "absolute", left: "15px", top: 0, bottom: 0, width: "2px", background: "linear-gradient(to bottom, var(--brand-primary), var(--bg-main))", opacity: 0.3 }}></div>
-          
-          {roadmap?.steps?.map((step) => {
-            const isDone = !!completedSteps[step.id];
-            return (
-              <div key={step.id} className="timeline-segment" style={{ position: "relative", marginBottom: "4rem" }}>
-                {/* Visual Node */}
-                <div style={{ 
-                  position: "absolute", 
-                  left: "calc(-3.5rem + 7px)", 
-                  top: "0.5rem", 
-                  width: "18px", 
-                  height: "18px", 
-                  borderRadius: "50%", 
-                  background: isDone ? "var(--accent-success)" : "var(--brand-primary)",
-                  boxShadow: isDone ? "0 0 20px var(--accent-success)" : "0 0 20px var(--brand-primary)",
-                  zIndex: 10,
-                  border: "4px solid var(--bg-main)"
-                }}></div>
+      <div className="timeline">
+        {roadmap?.steps?.map((step) => {
+          const isDone = !!completedSteps[step.id];
 
-                <div className="glass-panel" style={{ padding: "2rem", opacity: isDone ? 0.6 : 1, borderColor: isDone ? "var(--accent-success)" : "var(--border-subtle)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1.5rem" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "1.25rem" }}>
-                      <input 
-                        type="checkbox" 
-                        style={{ width: "24px", height: "24px", accentColor: "var(--brand-primary)", cursor: "pointer" }}
-                        checked={isDone}
-                        onChange={() => handleToggleStep(step.id)}
-                      />
-                      <h3 style={{ fontSize: "1.4rem", fontWeight: 700, textDecoration: isDone ? "line-through" : "none" }}>{step.title}</h3>
+          return (
+            <article key={step.id} className="timeline-item">
+              <div className="timeline-marker">
+                {isDone ? <CheckCircle2 size={20} /> : <Circle size={18} />}
+              </div>
+
+              <section className={`timeline-card ${isDone ? "is-complete" : ""}`}>
+                <div className="timeline-head">
+                  <div className="timeline-title">
+                    <input
+                      type="checkbox"
+                      checked={isDone}
+                      onChange={() => handleToggleStep(step.id)}
+                      aria-label={`Mark ${step.title} complete`}
+                    />
+                    <div>
+                      <h3>{step.title}</h3>
+                      <span className="timeline-category">{step.category}</span>
                     </div>
-                    <span className="status-badge" style={{ background: "rgba(255,255,255,0.03)", color: "var(--text-muted)" }}>{step.timeline}</span>
                   </div>
-                  
-                  <div style={{ marginBottom: "1.25rem" }}>
-                    <span style={{ fontSize: "0.8rem", fontWeight: 800, color: "var(--brand-secondary)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      {step.category}
-                    </span>
+                  <span className="status-pill">{step.timeline}</span>
+                </div>
+
+                <p className="timeline-description">{step.description}</p>
+
+                {step.benchmarkFocus?.length > 0 && (
+                  <div className="roadmap-block">
+                    <h4>Benchmark focus</h4>
+                    <div className="selected-skill-list">
+                      {step.benchmarkFocus.map((item) => (
+                        <span key={item} className="selected-skill">{item}</span>
+                      ))}
+                    </div>
                   </div>
-                  
-                  <p style={{ color: "var(--text-secondary)", fontSize: "1.05rem", lineHeight: "1.7", marginBottom: "2rem" }}>{step.description}</p>
-                  
-                  {step.skills && (
-                    <div className="skill-matrix-mini" style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-                      {step.skills.map(skill => (
-                        <span key={skill} style={{ padding: "0.5rem 1rem", borderRadius: "10px", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", fontSize: "0.85rem", fontWeight: 600, color: "white" }}>
-                          #{skill}
+                )}
+
+                {step.deliverables?.length > 0 && (
+                  <div className="roadmap-block">
+                    <h4>Semester deliverables</h4>
+                    <ul>
+                      {step.deliverables.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {step.placementRelevance && (
+                  <div className="roadmap-block note-box">
+                    {step.placementRelevance}
+                  </div>
+                )}
+
+                {step.skills?.length > 0 && (
+                  <div className="roadmap-block">
+                    <h4>Missing skills to build</h4>
+                    <div className="skill-grid">
+                      {step.skills.map((skill) => (
+                        <span key={skill} className="skill-button is-selected">
+                          {skill}
                         </span>
                       ))}
                     </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                  </div>
+                )}
+              </section>
+            </article>
+          );
+        })}
+      </div>
 
-        <div style={{ textAlign: "center", padding: "5rem 0" }}>
-          <button onClick={() => window.print()} className="btn-primary" style={{ width: "auto", padding: "1.25rem 4rem" }}>
-            📂 Generate Professional PDF Report
-          </button>
-        </div>
+      <div className="btn-row" style={{ justifyContent: "center", marginTop: 28 }}>
+        <button onClick={() => window.print()} className="btn btn-primary">
+          <FileDown size={18} />
+          Export printable report
+        </button>
+        <Link href="/skills" className="btn btn-secondary">
+          <ClipboardList size={18} />
+          Edit acquired skills
+        </Link>
       </div>
     </div>
   );

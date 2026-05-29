@@ -2,74 +2,228 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import Groq from "groq-sdk";
+import { analyzeSkillCorrelation, calculateCollegeRankings, parseCSV } from "@/lib/dataProcessor";
+import {
+  buildBenchmarkComparison,
+  getCollegeBenchmarkDataset,
+} from "@/lib/collegeBenchmarks";
+
+export const runtime = "nodejs";
+
+const formatScore = (score) => (score === null || score === undefined ? "not available" : `${score}/10`);
+
+const normalizeGraduationYear = (value) => {
+  const currentYear = new Date().getFullYear();
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed)) return currentYear + 2;
+  return Math.max(currentYear, parsed);
+};
+
+const getSemesterTerm = (semester, graduationYear) => {
+  const academicOffset = Math.floor((8 - semester) / 2);
+
+  if (semester % 2 === 1) {
+    return `Aug-Dec ${graduationYear - 1 - academicOffset}`;
+  }
+
+  return `Jan-May ${graduationYear - academicOffset}`;
+};
+
+const buildSemesterPlan = (graduationYear) => {
+  const currentYear = new Date().getFullYear();
+  const yearsUntilGraduation = Math.max(0, graduationYear - currentYear);
+  const semesterCount = Math.max(1, Math.min(8, yearsUntilGraduation * 2));
+  const startSemester = Math.max(1, 9 - semesterCount);
+
+  return Array.from({ length: 9 - startSemester }, (_, index) => {
+    const semester = startSemester + index;
+    const term = getSemesterTerm(semester, graduationYear);
+
+    return {
+      id: index + 1,
+      semester,
+      timeline: `Semester ${semester} (${term})`,
+    };
+  });
+};
+
+const readSkillsTaxonomy = () => {
+  const csvPath = path.join(process.cwd(), "public", "technical_skills.csv");
+  const fileContent = fs.readFileSync(csvPath, "utf8");
+  const lines = fileContent.split(/\r?\n/);
+  const skills = [];
+
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line) continue;
+
+    const parts = line.split(",");
+    if (parts.length >= 3) {
+      skills.push({
+        id: parts[0].trim(),
+        name: parts[1].trim(),
+        category: parts[2].trim(),
+      });
+    }
+  }
+
+  return skills;
+};
+
+const buildSkillsSummary = (skillsList) => {
+  const categoriesMap = {};
+
+  skillsList.forEach((skill) => {
+    if (!categoriesMap[skill.category]) categoriesMap[skill.category] = [];
+    if (categoriesMap[skill.category].length < 20) categoriesMap[skill.category].push(skill.name);
+  });
+
+  return Object.entries(categoriesMap)
+    .map(([category, skills]) => `- ${category}: ${skills.join(", ")}`)
+    .join("\n");
+};
+
+const readPlacementData = () => {
+  const candidatePaths = [
+    path.join(process.cwd(), "college_students_skills_vs_placement_reality.csv"),
+    path.join(process.cwd(), "public", "college_students_skills_vs_placement_reality.csv"),
+  ];
+  const csvPath = candidatePaths.find((candidate) => fs.existsSync(candidate));
+
+  if (!csvPath) return [];
+
+  return parseCSV(fs.readFileSync(csvPath, "utf8"));
+};
+
+const buildPlacementInsights = ({ placementData, userProfile, collegeRankings, skillAnalysis }) => {
+  const branch = userProfile?.branch || null;
+  const interestedRole = userProfile?.interestedRole || null;
+  const rankings =
+    Array.isArray(collegeRankings) && collegeRankings.length > 0
+      ? collegeRankings
+      : calculateCollegeRankings(placementData, branch, interestedRole);
+  const analysis =
+    skillAnalysis && Object.keys(skillAnalysis).length > 0
+      ? skillAnalysis
+      : interestedRole && branch
+        ? analyzeSkillCorrelation(placementData, interestedRole, branch)
+        : null;
+
+  let placementInsights = "";
+
+  if (rankings.length > 0) {
+    const topCollege = rankings[0];
+    placementInsights += `
+### PLACEMENT DATA INSIGHTS:
+- Top performer for ${branch || "all branches"} in ${interestedRole || "all roles"}: ${topCollege.college}
+  - Placement Rate: ${topCollege.placementRate}%
+  - Average Package: Rs. ${topCollege.avgPackage} LPA
+  - Average Skills Count: ${topCollege.avgSkillsCount}
+  - Average CGPA: ${topCollege.avgCGPA}
+  - Internship Rate: ${topCollege.internshipRate}%
+`;
+  }
+
+  if (analysis && Object.keys(analysis).length > 0) {
+    placementInsights += `
+- Success metrics for ${interestedRole}:
+  - Overall Placement Rate: ${analysis.placementRate?.toFixed?.(1) ?? analysis.placementRate}%
+  - Successful Students Had: ${analysis.avgSkillsPlaced} skills on average
+  - Unsuccessful Students Had: ${analysis.avgSkillsNotPlaced} skills on average
+  - Average Package for Placed: Rs. ${analysis.avgPackagePlaced} LPA
+  - Minimum CGPA for Placement: ${analysis.criticalFactors?.minCGPAForPlacement}
+  - Internship Significantly Boosts Placement: ${analysis.criticalFactors?.internshipBenefit ? "Yes" : "No"}
+`;
+  }
+
+  return placementInsights || "### PLACEMENT DATA INSIGHTS:\n- No matching placement segment found; prioritize benchmark gaps, target role fit, internships, and portfolio proof.";
+};
+
+const buildBenchmarkLines = (benchmarkComparison) =>
+  benchmarkComparison.comparison
+    .map((item) => {
+      const gap =
+        item.deficit === null
+          ? "selected score unavailable"
+          : item.deficit > 0
+            ? `gap ${item.deficit}`
+            : "at or above benchmark";
+
+      return `- ${item.label}: selected ${formatScore(item.selectedScore)} | benchmark ${item.benchmarkScore}/10 by ${item.benchmarkCollege} | ${gap}`;
+    })
+    .join("\n");
+
+const buildPriorityGapLines = (benchmarkComparison) => {
+  const priorityGaps = benchmarkComparison.priorityGaps.slice(0, 10);
+
+  if (priorityGaps.length === 0) {
+    return "- No positive benchmark gaps; focus on preserving advantages and role-specific depth.";
+  }
+
+  return priorityGaps
+    .map((item) => `- ${item.label}: improve by ${item.deficit} points to match ${item.benchmarkCollege}`)
+    .join("\n");
+};
+
+const sanitizeRoadmap = ({ roadmap, semesterPlan, skillsList, userSkills }) => {
+  const taxonomyByName = new Map(skillsList.map((skill) => [skill.name.toLowerCase(), skill.name]));
+  const existingSkills = new Set((userSkills || []).map((skill) => String(skill).toLowerCase()));
+  const steps = Array.isArray(roadmap.steps) ? roadmap.steps : [];
+
+  return {
+    ...roadmap,
+    steps: semesterPlan.map((semester, index) => {
+      const step = steps[index] || {};
+      const uniqueSkills = [];
+
+      (Array.isArray(step.skills) ? step.skills : []).forEach((skill) => {
+        const canonical = taxonomyByName.get(String(skill).toLowerCase());
+        if (!canonical || existingSkills.has(canonical.toLowerCase()) || uniqueSkills.includes(canonical)) return;
+        uniqueSkills.push(canonical);
+      });
+
+      return {
+        ...step,
+        id: index + 1,
+        semester: semester.semester,
+        timeline: semester.timeline,
+        title: step.title || `Semester ${semester.semester} Execution Plan`,
+        skills: uniqueSkills,
+      };
+    }),
+  };
+};
 
 export async function POST(request) {
   try {
-    const { collegeName, grades, categoryBenchmarks, userProfile, userSkills, collegeRankings, skillAnalysis } = await request.json();
+    const {
+      collegeName,
+      grades = {},
+      userProfile,
+      userSkills = [],
+      collegeRankings,
+      skillAnalysis,
+    } = await request.json();
 
-    if (!collegeName || !grades) {
-      return NextResponse.json({ error: "Missing collegeName or grades" }, { status: 400 });
+    if (!collegeName) {
+      return NextResponse.json({ error: "Missing collegeName" }, { status: 400 });
     }
 
-    const currentYear = new Date().getFullYear();
-    const gradYear = userProfile?.graduationYear || (currentYear + 2);
-    const yearsRemaining = Math.max(1, gradYear - currentYear);
-
-    // 1. Read technical_skills.csv for reference skill taxonomy
-    const csvPath = path.join(process.cwd(), "public", "technical_skills.csv");
-    let skillsList = [];
-    try {
-      const fileContent = fs.readFileSync(csvPath, "utf8");
-      const lines = fileContent.split(/\r?\n/);
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        const parts = line.split(",");
-        if (parts.length >= 3) {
-          skillsList.push({ id: parts[0].trim(), name: parts[1].trim(), category: parts[2].trim() });
-        }
-      }
-    } catch (err) {
-      console.error("CSV Read Error:", err);
-    }
-
-    // Group skills by category (max 20 per category)
-    const categoriesMap = {};
-    skillsList.forEach(s => {
-      if (!categoriesMap[s.category]) categoriesMap[s.category] = [];
-      if (categoriesMap[s.category].length < 20) categoriesMap[s.category].push(s.name);
+    const profile = userProfile || {};
+    const graduationYear = normalizeGraduationYear(profile.graduationYear);
+    const semesterPlan = buildSemesterPlan(graduationYear);
+    const benchmarkDataset = await getCollegeBenchmarkDataset();
+    const benchmarkComparison = buildBenchmarkComparison(benchmarkDataset, collegeName, grades);
+    const skillsList = readSkillsTaxonomy();
+    const skillsSummary = buildSkillsSummary(skillsList);
+    const placementInsights = buildPlacementInsights({
+      placementData: readPlacementData(),
+      userProfile: profile,
+      collegeRankings,
+      skillAnalysis,
     });
-    const skillsSummary = Object.entries(categoriesMap)
-      .map(([c, s]) => `- **${c}**: ${s.join(", ")}`)
-      .join("\n");
 
-    // 2. Build placement insights context
-    let placementInsights = "";
-    if (collegeRankings && collegeRankings.length > 0) {
-      const topCollege = collegeRankings[0];
-      placementInsights = `
-### PLACEMENT DATA INSIGHTS:
-- **Top Performing College** for ${userProfile?.branch} in ${userProfile?.interestedRole}: ${topCollege.college}
-  - Placement Rate: ${topCollege.placementRate}%
-  - Average Package: ₹${topCollege.avgPackage} LPA
-  - Average Skills Count: ${topCollege.avgSkillsCount}
-  - Average CGPA: ${topCollege.avgCGPA}
-`;
-    }
-
-    if (skillAnalysis) {
-      placementInsights += `
-- **Success Metrics for ${userProfile?.interestedRole}**:
-  - Overall Placement Rate: ${skillAnalysis.placementRate?.toFixed(1)}%
-  - Successful Students Had: ${skillAnalysis.avgSkillsPlaced} skills on average
-  - Unsuccessful Students Had: ${skillAnalysis.avgSkillsNotPlaced} skills on average
-  - Average Package for Placed: ₹${skillAnalysis.avgPackagePlaced} LPA
-  - Minimum CGPA for Placement: ${skillAnalysis.criticalFactors?.minCGPAForPlacement}
-  - Internship Significantly Boosts Placement: ${skillAnalysis.criticalFactors?.internshipBenefit ? "Yes" : "No"}
-`;
-    }
-
-    // 3. Groq API Setup
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) {
       return NextResponse.json(
@@ -78,83 +232,104 @@ export async function POST(request) {
       );
     }
 
-    // 4. Prompt Construction with placement insights
     const prompt = `
-You are a Senior Career Strategist AI with access to real placement data. Generate a professional, multi-year upskilling roadmap for a student.
+You are a Senior Career Strategist AI. Generate an accurate semester-wise roadmap by comparing the student's acquired skills with college benchmark gaps and placement success data.
 
-### CONTEXT:
-- **Date**: ${new Date().toDateString()}
-- **Student Profile**: ${userProfile?.branch || "General Engineering"}, targeting **${userProfile?.interestedRole || "Software Role"}**.
-- **Graduation Year**: ${gradYear} (${yearsRemaining} years remaining).
-- **Existing Skills**: ${userSkills?.length > 0 ? userSkills.join(", ") : "Entry-level (no specific skills listed)"}.
+### SOURCE OF TRUTH:
+- College benchmark workbook: ${benchmarkDataset.source}, sheet: ${benchmarkDataset.sheetName}.
+- Every numeric *_Score column is a benchmark dimension.
+- For each dimension, the benchmark is the highest score in that workbook column across all colleges.
+- Requested college: ${collegeName}
+- Matched workbook college: ${benchmarkComparison.matchedCollegeName || "No exact workbook match; use available selected scores only"}
+
+### STUDENT PROFILE:
+- Date: ${new Date().toDateString()}
+- Branch: ${profile.branch || "General Engineering"}
+- Target role: ${profile.interestedRole || "Software Role"}
+- Graduation year: ${graduationYear}
+- Roadmap must contain exactly ${semesterPlan.length} semester steps:
+${semesterPlan.map((semester) => `  - ${semester.timeline}`).join("\n")}
+- Already acquired skills: ${userSkills.length > 0 ? userSkills.join(", ") : "none listed"}
 
 ${placementInsights}
 
-### INSTITUTIONAL GAP ANALYSIS (Category-Wise):
-The student's college ("${collegeName}") is evaluated against the *regional best* performer in each category:
-${Object.entries(grades).map(([key, val]) => {
-  const bench = categoryBenchmarks?.[key] || { score: 10, college: "Gold Standard" };
-  const variance = bench.score - val;
-  return `- ${key.replace(/_/g, " ")}: ${val}/10 (Regional Best: ${bench.score}/10 by ${bench.college} | Variance: -${variance})`;
-}).join("\n")}
+### COLLEGE BENCHMARK COMPARISON:
+${buildBenchmarkLines(benchmarkComparison)}
 
-### REFERENCE SKILLS TAXONOMY (from database):
+### HIGHEST PRIORITY BENCHMARK GAPS:
+${buildPriorityGapLines(benchmarkComparison)}
+
+### REFERENCE SKILLS TAXONOMY:
 ${skillsSummary}
 
 ### INSTRUCTIONS:
-1. **Data-Driven Strategy**: Use placement metrics above to prioritize skills that correlate with successful placements.
-2. **Strategic Pivot**: If variances are large (deficit > 3), prioritize "Aggressive Off-Campus" tracks.
-3. **Timeline Alignment**: Break the roadmap into ${yearsRemaining * 2} semesters/phases.
-4. **Outcome Focused**: Ensure the skills recommended directly contribute to becoming a **${userProfile?.interestedRole || "Software Engineer"}**.
-5. **No Redundancy**: Acknowledge but do NOT re-list existing skills: ${userSkills?.join(", ") || "none"}.
-6. **Use the taxonomy**: Only recommend skills that exist in the REFERENCE SKILLS TAXONOMY above.
-7. **Internship Emphasis**: Since placement data shows internships boost success, recommend strong internship opportunities.
+1. Build one roadmap step for each listed semester only. Do not combine multiple semesters into one phase.
+2. Compare acquired skills against the target-role needs and benchmark gaps. Recommend only missing skills.
+3. Do not re-list already acquired skills as recommended skills. You may mention them only as prerequisites already completed.
+4. Recommended skills must use exact names from the REFERENCE SKILLS TAXONOMY.
+5. Tie each semester to the highest-priority benchmark gaps, placement success metrics, internships, projects, CGPA, and interview readiness.
+6. If the benchmark gap is large, include off-campus execution, external projects, certifications, and recruiter outreach.
+7. Make the roadmap concrete enough for a student to execute: deliverables, projects, internships, assessment goals, and placement relevance.
 
-### OUTPUT — respond with STRICT JSON only, no markdown, no explanation:
+### OUTPUT:
+Respond with STRICT JSON only, no markdown, no code fences, no explanation:
 {
-  "strategyType": "e.g., Data-Driven Industrial-Ready Track",
-  "deficitSummary": "Professional summary incorporating institutional gap analysis AND placement data insights. Explain which skills from placement data are most critical.",
-  "placementStrategy": "Specific actions to replicate success patterns from top-performing colleges",
+  "strategyType": "Data-driven strategy name",
+  "deficitSummary": "Summary of college benchmark gaps, acquired skills, and most critical missing capabilities.",
+  "placementStrategy": "Specific actions to replicate successful placement patterns.",
+  "benchmarkSource": "${benchmarkDataset.source}",
+  "matchedCollege": "${benchmarkComparison.matchedCollegeName || ""}",
+  "graduationYear": ${graduationYear},
   "steps": [
     {
       "id": 1,
-      "title": "Year/Phase Title",
+      "semester": ${semesterPlan[0].semester},
+      "title": "Semester-specific title",
       "category": "Domain from taxonomy",
-      "description": "Specific action items for this phase, grounded in placement data where applicable.",
-      "skills": ["Skill1", "Skill2"],
-      "timeline": "e.g., Semester 1-2 (Year 1)",
-      "placementRelevance": "How this aligns with successful placement patterns"
+      "description": "Specific semester action plan.",
+      "skills": ["Exact taxonomy skill"],
+      "timeline": "${semesterPlan[0].timeline}",
+      "benchmarkFocus": ["Specific benchmark gap"],
+      "deliverables": ["Concrete output"],
+      "placementRelevance": "How this improves placement probability"
     }
   ]
 }
 `;
 
-    // 5. Call Groq (uses Llama 3.3 70B — free tier)
     const client = new Groq({ apiKey: groqKey });
     const chatCompletion = await client.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "system",
-          content: "You are a data-driven career strategist AI. You MUST respond with valid JSON only. No markdown, no code fences, no explanation — just the raw JSON object."
+          content:
+            "You are a data-driven career strategist AI. You MUST respond with valid JSON only. No markdown, no code fences, no explanation, just the raw JSON object.",
         },
         {
           role: "user",
-          content: prompt
-        }
+          content: prompt,
+        },
       ],
-      temperature: 0.7,
-      max_tokens: 2048,
+      temperature: 0.25,
+      max_tokens: 4096,
       response_format: { type: "json_object" },
     });
 
     const text = chatCompletion.choices?.[0]?.message?.content;
     if (!text) throw new Error("Empty AI response from Groq");
 
-    // Strip any accidental markdown code fences before parsing
     const cleaned = text.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
-    return NextResponse.json(JSON.parse(cleaned));
+    const roadmap = JSON.parse(cleaned);
 
+    return NextResponse.json(
+      sanitizeRoadmap({
+        roadmap,
+        semesterPlan,
+        skillsList,
+        userSkills,
+      })
+    );
   } catch (error) {
     console.error("Roadmap API Error:", error);
     return NextResponse.json({ error: "Internal Server Error", details: error.message }, { status: 500 });

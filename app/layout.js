@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export const metadata = {
   title: "Pathfinder AI | Career Strategy Platform",
-  description: "Industry-standard career benchmarking and personalized upskilling roadmaps powered by Gemini AI.",
+  description: "College benchmark comparison and semester-wise career roadmaps.",
 };
 
 export default function RootLayout({ children }) {
@@ -17,11 +17,10 @@ export default function RootLayout({ children }) {
               <span>PATHFINDER AI</span>
             </Link>
             <nav className="nav-links">
-              <Link href="/" className="nav-link">Dashboard</Link>
-              <Link href="/skills" className="nav-link">Skill Matrix</Link>
-              <Link href="/roadmap" className="nav-link">Career Path</Link>
+              <Link href="/" className="nav-link">Benchmark</Link>
+              <Link href="/skills" className="nav-link">Skills</Link>
+              <Link href="/roadmap" className="nav-link">Roadmap</Link>
             </nav>
-            <div style={{ visibility: "hidden" }} className="brand-dot"></div>
           </div>
         </header>
         <main>
