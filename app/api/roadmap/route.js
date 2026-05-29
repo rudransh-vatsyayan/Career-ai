@@ -5,7 +5,7 @@ import Groq from "groq-sdk";
 
 export async function POST(request) {
   try {
-    const { collegeName, grades, categoryBenchmarks, userProfile, userSkills } = await request.json();
+    const { collegeName, grades, categoryBenchmarks, userProfile, userSkills, collegeRankings, skillAnalysis } = await request.json();
 
     if (!collegeName || !grades) {
       return NextResponse.json({ error: "Missing collegeName or grades" }, { status: 400 });
@@ -16,7 +16,7 @@ export async function POST(request) {
     const yearsRemaining = Math.max(1, gradYear - currentYear);
 
     // 1. Read technical_skills.csv for reference skill taxonomy
-    const csvPath = path.join(process.cwd(), "technical_skills.csv");
+    const csvPath = path.join(process.cwd(), "public", "technical_skills.csv");
     let skillsList = [];
     try {
       const fileContent = fs.readFileSync(csvPath, "utf8");
@@ -43,7 +43,33 @@ export async function POST(request) {
       .map(([c, s]) => `- **${c}**: ${s.join(", ")}`)
       .join("\n");
 
-    // 2. Groq API Setup
+    // 2. Build placement insights context
+    let placementInsights = "";
+    if (collegeRankings && collegeRankings.length > 0) {
+      const topCollege = collegeRankings[0];
+      placementInsights = `
+### PLACEMENT DATA INSIGHTS:
+- **Top Performing College** for ${userProfile?.branch} in ${userProfile?.interestedRole}: ${topCollege.college}
+  - Placement Rate: ${topCollege.placementRate}%
+  - Average Package: ₹${topCollege.avgPackage} LPA
+  - Average Skills Count: ${topCollege.avgSkillsCount}
+  - Average CGPA: ${topCollege.avgCGPA}
+`;
+    }
+
+    if (skillAnalysis) {
+      placementInsights += `
+- **Success Metrics for ${userProfile?.interestedRole}**:
+  - Overall Placement Rate: ${skillAnalysis.placementRate?.toFixed(1)}%
+  - Successful Students Had: ${skillAnalysis.avgSkillsPlaced} skills on average
+  - Unsuccessful Students Had: ${skillAnalysis.avgSkillsNotPlaced} skills on average
+  - Average Package for Placed: ₹${skillAnalysis.avgPackagePlaced} LPA
+  - Minimum CGPA for Placement: ${skillAnalysis.criticalFactors?.minCGPAForPlacement}
+  - Internship Significantly Boosts Placement: ${skillAnalysis.criticalFactors?.internshipBenefit ? "Yes" : "No"}
+`;
+    }
+
+    // 3. Groq API Setup
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) {
       return NextResponse.json(
@@ -52,15 +78,17 @@ export async function POST(request) {
       );
     }
 
-    // 3. Prompt Construction
+    // 4. Prompt Construction with placement insights
     const prompt = `
-You are a Senior Career Strategist AI. Generate a professional, multi-year upskilling roadmap for a student.
+You are a Senior Career Strategist AI with access to real placement data. Generate a professional, multi-year upskilling roadmap for a student.
 
 ### CONTEXT:
 - **Date**: ${new Date().toDateString()}
 - **Student Profile**: ${userProfile?.branch || "General Engineering"}, targeting **${userProfile?.interestedRole || "Software Role"}**.
 - **Graduation Year**: ${gradYear} (${yearsRemaining} years remaining).
 - **Existing Skills**: ${userSkills?.length > 0 ? userSkills.join(", ") : "Entry-level (no specific skills listed)"}.
+
+${placementInsights}
 
 ### INSTITUTIONAL GAP ANALYSIS (Category-Wise):
 The student's college ("${collegeName}") is evaluated against the *regional best* performer in each category:
@@ -74,37 +102,41 @@ ${Object.entries(grades).map(([key, val]) => {
 ${skillsSummary}
 
 ### INSTRUCTIONS:
-1. **Strategic Pivot**: If variances are large (deficit > 3), prioritize "Aggressive Off-Campus" tracks.
-2. **Timeline Alignment**: Break the roadmap into ${yearsRemaining * 2} semesters/phases.
-3. **Outcome Focused**: Ensure the skills recommended directly contribute to becoming a **${userProfile?.interestedRole || "Software Engineer"}**.
-4. **No Redundancy**: Acknowledge but do NOT re-list existing skills: ${userSkills?.join(", ") || "none"}.
-5. **Use the taxonomy**: Only recommend skills that exist in the REFERENCE SKILLS TAXONOMY above.
+1. **Data-Driven Strategy**: Use placement metrics above to prioritize skills that correlate with successful placements.
+2. **Strategic Pivot**: If variances are large (deficit > 3), prioritize "Aggressive Off-Campus" tracks.
+3. **Timeline Alignment**: Break the roadmap into ${yearsRemaining * 2} semesters/phases.
+4. **Outcome Focused**: Ensure the skills recommended directly contribute to becoming a **${userProfile?.interestedRole || "Software Engineer"}**.
+5. **No Redundancy**: Acknowledge but do NOT re-list existing skills: ${userSkills?.join(", ") || "none"}.
+6. **Use the taxonomy**: Only recommend skills that exist in the REFERENCE SKILLS TAXONOMY above.
+7. **Internship Emphasis**: Since placement data shows internships boost success, recommend strong internship opportunities.
 
 ### OUTPUT — respond with STRICT JSON only, no markdown, no explanation:
 {
-  "strategyType": "e.g., Aggressive Industrial-Ready Track",
-  "deficitSummary": "Professional summary of the institutional gap and chosen strategy.",
+  "strategyType": "e.g., Data-Driven Industrial-Ready Track",
+  "deficitSummary": "Professional summary incorporating institutional gap analysis AND placement data insights. Explain which skills from placement data are most critical.",
+  "placementStrategy": "Specific actions to replicate success patterns from top-performing colleges",
   "steps": [
     {
       "id": 1,
       "title": "Year/Phase Title",
       "category": "Domain from taxonomy",
-      "description": "Specific action items for this phase.",
+      "description": "Specific action items for this phase, grounded in placement data where applicable.",
       "skills": ["Skill1", "Skill2"],
-      "timeline": "e.g., Semester 1-2 (Year 1)"
+      "timeline": "e.g., Semester 1-2 (Year 1)",
+      "placementRelevance": "How this aligns with successful placement patterns"
     }
   ]
 }
 `;
 
-    // 4. Call Groq (uses Llama 3.3 70B — free tier)
+    // 5. Call Groq (uses Llama 3.3 70B — free tier)
     const client = new Groq({ apiKey: groqKey });
     const chatCompletion = await client.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
         {
           role: "system",
-          content: "You are a career strategist AI. You MUST respond with valid JSON only. No markdown, no code fences, no explanation — just the raw JSON object."
+          content: "You are a data-driven career strategist AI. You MUST respond with valid JSON only. No markdown, no code fences, no explanation — just the raw JSON object."
         },
         {
           role: "user",
