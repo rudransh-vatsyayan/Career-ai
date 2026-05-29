@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { parseCSV, calculateCollegeRankings, analyzeSkillCorrelation } from "@/lib/dataProcessor";
 
 const INITIAL_CATEGORIES = [
   { key: "Placement_Statistics", label: "Placement Statistics" },
@@ -23,9 +24,11 @@ export default function Dashboard() {
   const [colleges, setColleges] = useState([]);
   const [categories, setCategories] = useState(INITIAL_CATEGORIES);
   const [selectedCollege, setSelectedCollege] = useState(null);
-  const [categoryBenchmarks, setCategoryBenchmarks] = useState({}); // Top performer per category
-  const [isDragOver, setIsDragOver] = useState(false);
+  const [categoryBenchmarks, setCategoryBenchmarks] = useState({});
   const [loading, setLoading] = useState(true);
+  const [placementData, setPlacementData] = useState([]);
+  const [collegeRankings, setCollegeRankings] = useState([]);
+  const [skillAnalysis, setSkillAnalysis] = useState(null);
 
   // User Profile State
   const [userProfile, setUserProfile] = useState({
@@ -33,7 +36,8 @@ export default function Dashboard() {
     branch: "",
     interestedRole: "",
     graduationYear: new Date().getFullYear() + 2,
-    isManualCollege: false
+    isManualCollege: false,
+    selectedSkills: []
   });
 
   const [jobTitles, setJobTitles] = useState([]);
@@ -48,7 +52,6 @@ export default function Dashboard() {
     setColleges(parsedColleges);
     setCategories(cats);
 
-    // Compute category benchmarks (highest score for each category)
     const benchmarks = {};
     cats.forEach(cat => {
       let maxScore = -1;
@@ -64,7 +67,6 @@ export default function Dashboard() {
     });
     setCategoryBenchmarks(benchmarks);
 
-    // Default selection to SJCE if available
     const sjce = parsedColleges.find(c => c.name.includes("SJCE") || c.name.includes("JSS"));
     setSelectedCollege(sjce || parsedColleges[0]);
   }, []);
@@ -110,7 +112,49 @@ export default function Dashboard() {
     }
   }, [processColleges]);
 
-  // 1. Initial Load
+  // Load and process placement data
+  useEffect(() => {
+    const loadPlacementData = async () => {
+      try {
+        const response = await fetch("/college_students_skills_vs_placement_reality.csv");
+        if (response.ok) {
+          const csvText = await response.text();
+          const data = parseCSV(csvText);
+          setPlacementData(data);
+        }
+      } catch (err) {
+        console.error("Failed to load placement data:", err);
+      }
+    };
+
+    loadPlacementData();
+  }, []);
+
+  // Update college rankings when profile changes
+  useEffect(() => {
+    if (placementData.length > 0 && userProfile.branch) {
+      const rankings = calculateCollegeRankings(
+        placementData,
+        userProfile.branch,
+        userProfile.interestedRole || null
+      );
+      setCollegeRankings(rankings);
+    }
+  }, [placementData, userProfile.branch, userProfile.interestedRole]);
+
+  // Analyze skills for placement
+  useEffect(() => {
+    if (placementData.length > 0 && userProfile.interestedRole && userProfile.branch) {
+      const analysis = analyzeSkillCorrelation(
+        placementData,
+        userProfile.interestedRole,
+        userProfile.branch
+      );
+      setSkillAnalysis(analysis);
+    }
+  }, [placementData, userProfile.interestedRole, userProfile.branch]);
+
+  // Initial Load
   useEffect(() => {
     const cachedProfile = localStorage.getItem("userProfile");
     
@@ -127,7 +171,6 @@ export default function Dashboard() {
       }
     }
 
-    // Always fetch the official SJCE dataset
     fetch("/sjce_data.csv")
       .then(res => res.text())
       .then(text => parseCSVText(text, true))
@@ -136,7 +179,6 @@ export default function Dashboard() {
         setLoading(false);
       });
 
-    // Fetch static datasets
     fetch("/job_titles.json").then(res => res.json()).then(setJobTitles).catch(() => {});
     fetch("/branches.json").then(res => res.json()).then(setBranches).catch(() => {});
 
@@ -160,6 +202,14 @@ export default function Dashboard() {
       alert("Please select a college.");
       return;
     }
+    if (!userProfile.branch) {
+      alert("Please select your branch/specialization.");
+      return;
+    }
+    if (!userProfile.interestedRole) {
+      alert("Please select your target role.");
+      return;
+    }
     
     const finalCollege = userProfile.isManualCollege 
       ? { name: userProfile.collegeName, grades: {}, totalScore: 0 }
@@ -168,8 +218,10 @@ export default function Dashboard() {
     localStorage.setItem("roadmapSelection", JSON.stringify(finalCollege));
     localStorage.setItem("categoryBenchmarks", JSON.stringify(categoryBenchmarks));
     localStorage.setItem("userProfile", JSON.stringify(userProfile));
+    localStorage.setItem("collegeRankings", JSON.stringify(collegeRankings));
+    localStorage.setItem("skillAnalysis", JSON.stringify(skillAnalysis));
     
-    router.push("/roadmap");
+    router.push("/skills");
   };
 
   const handleProfileChange = (e) => {
@@ -193,7 +245,7 @@ export default function Dashboard() {
       <header className="page-hero">
         <h1 className="hero-title">Career Benchmarking</h1>
         <p className="hero-subtitle">
-          Evaluate institutional performance metrics against regional leaders to architect your professional trajectory.
+          Evaluate institutional performance metrics against regional leaders and craft your professional trajectory.
         </p>
       </header>
 
@@ -286,7 +338,7 @@ export default function Dashboard() {
               )}
 
               <button type="submit" className="btn-primary" style={{ marginTop: "1rem" }}>
-                Generate Strategy 🚀
+                Continue to Skills Selection 🚀
               </button>
             </form>
           </section>
@@ -295,50 +347,126 @@ export default function Dashboard() {
         {/* Analytics Main View */}
         <main className="analytics-column">
           {selectedCollege && (
-            <section className="glass-panel">
-              <div className="analytics-header">
-                <div>
-                  <h2 className="panel-title" style={{ marginBottom: "0.25rem" }}>
-                    <span>📊</span> Regional Gap Analysis
-                  </h2>
-                  <p style={{ color: "var(--text-muted)", fontSize: "0.95rem" }}>
-                    Performance variance of <strong>{selectedCollege.name}</strong> vs regional category leaders.
-                  </p>
+            <>
+              <section className="glass-panel">
+                <div className="analytics-header">
+                  <div>
+                    <h2 className="panel-title" style={{ marginBottom: "0.25rem" }}>
+                      <span>📊</span> Regional Gap Analysis
+                    </h2>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.95rem" }}>
+                      Performance variance of <strong>{selectedCollege.name}</strong> vs regional category leaders.
+                    </p>
+                  </div>
+                  <div className="status-badge">Official Dataset: SJCE-2024</div>
                 </div>
-                <div className="status-badge">Official Dataset: SJCE-2024</div>
-              </div>
 
-              <div className="category-matrix" style={{ marginTop: "3rem" }}>
-                {categories.map(cat => {
-                  const score = selectedCollege.grades[cat.key] || 0;
-                  const bench = categoryBenchmarks[cat.key];
-                  const deficit = (bench?.score || 10) - score;
-                  
-                  return (
-                    <div key={cat.key} className="category-card">
-                      <div className="category-info">
-                        <span className="category-name">{cat.label}</span>
-                        <span className="category-score">{score}/10</span>
+                <div className="category-matrix" style={{ marginTop: "3rem" }}>
+                  {categories.map(cat => {
+                    const score = selectedCollege.grades[cat.key] || 0;
+                    const bench = categoryBenchmarks[cat.key];
+                    const deficit = (bench?.score || 10) - score;
+                    
+                    return (
+                      <div key={cat.key} className="category-card">
+                        <div className="category-info">
+                          <span className="category-name">{cat.label}</span>
+                          <span className="category-score">{score}/10</span>
+                        </div>
+                        <div className="progress-track">
+                          <div 
+                            className="progress-fill" 
+                            style={{ 
+                              width: `${score * 10}%`,
+                              background: score >= 8 ? "var(--accent-success)" : score >= 5 ? "var(--accent-warning)" : "var(--accent-error)"
+                            }}
+                          ></div>
+                          <div className="benchmark-pin" style={{ left: `${(bench?.score || 10) * 10}%` }}></div>
+                        </div>
+                        <div className="category-meta">
+                          <span>Best: {bench?.score} ({bench?.college})</span>
+                          {deficit > 0 && <span className="deficit-indicator">Gap: -{deficit}</span>}
+                        </div>
                       </div>
-                      <div className="progress-track">
-                        <div 
-                          className="progress-fill" 
-                          style={{ 
-                            width: `${score * 10}%`,
-                            background: score >= 8 ? "var(--accent-success)" : score >= 5 ? "var(--accent-warning)" : "var(--accent-error)"
-                          }}
-                        ></div>
-                        <div className="benchmark-pin" style={{ left: `${(bench?.score || 10) * 10}%` }}></div>
-                      </div>
-                      <div className="category-meta">
-                        <span>Best: {bench?.score} ({bench?.college})</span>
-                        {deficit > 0 && <span className="deficit-indicator">Gap: -{deficit}</span>}
-                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {/* College Rankings Section */}
+              {collegeRankings.length > 0 && (
+                <section className="glass-panel" style={{ marginTop: "2rem" }}>
+                  <div className="analytics-header">
+                    <div>
+                      <h2 className="panel-title" style={{ marginBottom: "0.25rem" }}>
+                        <span>🏆</span> College Rankings by Placement Success
+                      </h2>
+                      <p style={{ color: "var(--text-muted)", fontSize: "0.95rem" }}>
+                        Ranked by placement rate and average package for {userProfile.branch} in {userProfile.interestedRole || "all roles"}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
-            </section>
+                  </div>
+
+                  <div className="rankings-table" style={{ marginTop: "2rem" }}>
+                    {collegeRankings.slice(0, 5).map((ranking, idx) => (
+                      <div key={ranking.college} className="ranking-card">
+                        <div className="ranking-position">#{idx + 1}</div>
+                        <div className="ranking-details">
+                          <h4>{ranking.college}</h4>
+                          <div className="ranking-metrics">
+                            <span className="metric">📈 {ranking.placementRate}% Placement</span>
+                            <span className="metric">💰 ₹{ranking.avgPackage} LPA</span>
+                            <span className="metric">🎯 {ranking.avgSkillsCount} Avg Skills</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {/* Skill Analysis Section */}
+              {skillAnalysis && (
+                <section className="glass-panel" style={{ marginTop: "2rem" }}>
+                  <div className="analytics-header">
+                    <div>
+                      <h2 className="panel-title" style={{ marginBottom: "0.25rem" }}>
+                        <span>💡</span> Skills Analysis for {userProfile.interestedRole}
+                      </h2>
+                      <p style={{ color: "var(--text-muted)", fontSize: "0.95rem" }}>
+                        What successful graduates had to get placed in your target role
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: "2rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "1.5rem" }}>
+                    <div className="analysis-card">
+                      <h4>Placement Rate</h4>
+                      <p style={{ fontSize: "1.8rem", fontWeight: "bold", color: "var(--accent-success)" }}>
+                        {skillAnalysis.placementRate?.toFixed(1)}%
+                      </p>
+                      <p style={{ color: "var(--text-muted)" }}>{skillAnalysis.placedCount} of {skillAnalysis.totalCount} students</p>
+                    </div>
+
+                    <div className="analysis-card">
+                      <h4>Avg Skills (Placed)</h4>
+                      <p style={{ fontSize: "1.8rem", fontWeight: "bold", color: "var(--accent-success)" }}>
+                        {skillAnalysis.avgSkillsPlaced}
+                      </p>
+                      <p style={{ color: "var(--text-muted)" }}>vs {skillAnalysis.avgSkillsNotPlaced} for unplaced</p>
+                    </div>
+
+                    <div className="analysis-card">
+                      <h4>Avg Package</h4>
+                      <p style={{ fontSize: "1.8rem", fontWeight: "bold", color: "var(--accent-success)" }}>
+                        ₹{skillAnalysis.avgPackagePlaced} LPA
+                      </p>
+                      <p style={{ color: "var(--text-muted)" }}>Min CGPA: {skillAnalysis.criticalFactors?.minCGPAForPlacement}</p>
+                    </div>
+                  </div>
+                </section>
+              )}
+            </>
           )}
         </main>
       </div>
