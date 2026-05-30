@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Circle, ClipboardList, FileDown, Gauge, Target } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Circle, ClipboardList, FileDown, Gauge, Target, BarChart3, TrendingUp } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function RoadmapPage() {
   const [collegeData, setCollegeData] = useState(null);
@@ -65,7 +66,7 @@ export default function RoadmapPage() {
         .then(res => {
           if (!res.ok) {
             return res.json().then(errData => {
-              throw new Error(errData.error || "Server responded with error generating roadmap");
+              throw new Error(errData.error || errData.details || "Server responded with error generating roadmap");
             });
           }
           return res.json();
@@ -101,13 +102,21 @@ export default function RoadmapPage() {
     localStorage.setItem(`progress_${collegeData.name}`, JSON.stringify(newProgress));
   };
 
-  const getCompletionPercentage = () => {
+  const completionRate = useMemo(() => {
     if (!roadmap?.steps?.length) return 0;
     const completedCount = Object.values(completedSteps).filter(Boolean).length;
     return Math.round((completedCount / roadmap.steps.length) * 100);
-  };
+  }, [roadmap, completedSteps]);
 
-  const completionRate = getCompletionPercentage();
+  // Skills per semester for chart
+  const skillsChartData = useMemo(() => {
+    if (!roadmap?.steps) return [];
+    return roadmap.steps.map(step => ({
+      semester: `Sem ${step.semester || step.id}`,
+      skills: step.skills?.length || 0,
+      label: step.timeline?.split("(")[0]?.trim() || `Semester ${step.id}`
+    }));
+  }, [roadmap]);
 
   if (loading) {
     return (
@@ -128,10 +137,15 @@ export default function RoadmapPage() {
           <Circle size={36} />
           <h2>Roadmap generation failed</h2>
           <p>{error}</p>
-          <Link href="/" className="btn btn-primary" style={{ marginTop: 18 }}>
-            <ArrowLeft size={18} />
-            Back to benchmark setup
-          </Link>
+          <div className="btn-row" style={{ justifyContent: "center", marginTop: 18 }}>
+            <button onClick={() => window.location.reload()} className="btn btn-primary">
+              Retry
+            </button>
+            <Link href="/skills" className="btn btn-secondary">
+              <ArrowLeft size={18} />
+              Back to skills
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -139,20 +153,23 @@ export default function RoadmapPage() {
 
   if (!roadmap || !roadmap.steps) {
     return (
-      <div className="glass-panel" style={{ textAlign: "center", padding: "4rem" }}>
-        <span style={{ fontSize: "3rem" }}>❌</span>
-        <h2 style={{ fontSize: "1.5rem", fontWeight: "700", marginTop: "1rem" }}>
-          No Roadmap Data
-        </h2>
-        <p style={{ color: "var(--text-secondary)", marginTop: "0.5rem", marginBottom: "2rem" }}>
-          The AI response was invalid or empty. Please try again.
-        </p>
-        <Link href="/" className="btn-upload" style={{ textDecoration: "none" }}>
-          ⬅️ Back to Dashboard
-        </Link>
+      <div className="workspace-page centered-state">
+        <div className="empty-state-inner">
+          <Circle size={36} />
+          <h2>No roadmap data</h2>
+          <p>The AI response was invalid or empty. Please try again.</p>
+          <Link href="/" className="btn btn-primary" style={{ marginTop: 18 }}>
+            <ArrowLeft size={18} />
+            Back to Dashboard
+          </Link>
+        </div>
       </div>
     );
   }
+
+  const totalSkills = roadmap.steps.reduce((s, step) => s + (step.skills?.length || 0), 0);
+  const completedCount = Object.values(completedSteps).filter(Boolean).length;
+  const totalSteps = roadmap.steps.length;
 
   return (
     <div className="workspace-page roadmap-wrap">
@@ -173,132 +190,142 @@ export default function RoadmapPage() {
         </Link>
       </header>
 
-      <section className="panel strategy-panel">
-        <div className="section-title">
-          <Gauge size={22} />
+      {/* Stats Overview */}
+      <div className="stats-row" style={{ marginBottom: 24 }}>
+        <div className="stat-card">
+          <span className="stat-label">Strategy</span>
+          <p className="stat-value" style={{ fontSize: "1.1rem" }}>{roadmap?.strategyType || "Career plan"}</p>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Semesters planned</span>
+          <p className="stat-value">{totalSteps}</p>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Skills to acquire</span>
+          <p className="stat-value">{totalSkills}</p>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Completed</span>
+          <p className="stat-value">{completedCount}/{totalSteps}</p>
+        </div>
+      </div>
+
+      {/* Strategy + Progress Section */}
+      <div className="card strategy-panel">
+        <div className="strategy-grid">
           <div>
-            <h2>{roadmap?.strategyType}</h2>
-            <p>{roadmap?.matchedCollege ? `Matched benchmark college: ${roadmap.matchedCollege}` : "Generated from selected benchmark data."}</p>
-            <p style={{ fontSize: "1.15rem", color: "var(--text-primary)", lineHeight: "1.8", opacity: 0.9 }}>
+            <div className="card-header" style={{ marginBottom: 10 }}>
+              <Gauge size={18} />
+              <h2>{roadmap?.strategyType}</h2>
+            </div>
+            {roadmap?.matchedCollege && (
+              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", marginBottom: 10 }}>Matched benchmark: {roadmap.matchedCollege}</p>
+            )}
+            <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", lineHeight: "1.65", marginBottom: 14 }}>
               {roadmap?.deficitSummary}
             </p>
             {roadmap?.placementStrategy && (
-              <div style={{ marginTop: "1.5rem", padding: "1rem", background: "rgba(76, 175, 80, 0.08)", borderRadius: "8px", borderLeft: "3px solid var(--accent-success)" }}>
-                <p style={{ fontSize: "0.95rem", color: "var(--text-secondary)", margin: 0 }}>
-                  <strong>📊 Placement Strategy:</strong> {roadmap.placementStrategy}
-                </p>
+              <div className="insight-box">
+                <p><strong>Placement Strategy:</strong> {roadmap.placementStrategy}</p>
               </div>
             )}
           </div>
-        </div>
-
-        <div className="strategy-grid">
           <div>
-            <p style={{ color: "var(--text-secondary)" }}>{roadmap?.deficitSummary}</p>
-            {roadmap?.placementStrategy && (
-              <div className="note-box" style={{ marginTop: 14 }}>
-                {roadmap.placementStrategy}
+            <div className="roadmap-progress">
+              <span className="progress-pct" style={{ color: completionRate >= 70 ? "var(--accent-success)" : completionRate >= 30 ? "var(--accent-warning)" : "var(--accent-error)" }}>
+                {completionRate}%
+              </span>
+              <span className="progress-label">overall completion</span>
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${completionRate}%`, background: completionRate >= 70 ? "var(--accent-success)" : completionRate >= 30 ? "var(--accent-warning)" : "var(--accent-error)" }} />
+              </div>
+            </div>
+            {skillsChartData.length > 0 && (
+              <div className="skills-chart-mini">
+                <div className="chart-label">
+                  <BarChart3 size={13} />
+                  Skills per semester
+                </div>
+                <ResponsiveContainer width="100%" height={100}>
+                  <BarChart data={skillsChartData} margin={{ top: 0, right: 0, bottom: 0, left: -12 }}>
+                    <XAxis dataKey="semester" tick={{ fontSize: 9, fill: "var(--text-secondary)" }} axisLine={false} tickLine={false} />
+                    <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid var(--border)", boxShadow: "var(--shadow)", fontSize: 12 }} formatter={(value) => [value, "Skills"]} />
+                    <Bar dataKey="skills" fill="var(--accent-primary)" radius={[3, 3, 0, 0]} maxBarSize={20} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             )}
           </div>
-          <div className="roadmap-progress">
-            <strong>{completionRate}%</strong>
-            <span>completion</span>
-            <div className="progress-track" style={{ marginTop: 12 }}>
-              <div className="progress-fill" style={{ width: `${completionRate}%` }}></div>
-            </div>
-          </div>
         </div>
-      </section>
+      </div>
 
       {/* Sequential Timeline */}
-      <div className="professional-timeline" style={{ position: "relative", paddingLeft: "3.5rem" }}>
-        <div style={{ position: "absolute", left: "15px", top: 0, bottom: 0, width: "2px", background: "linear-gradient(to bottom, var(--brand-primary), var(--bg-main))", opacity: 0.3 }}></div>
+      <div className="timeline">
+        <div className="timeline-rail" />
 
         {roadmap.steps.map((step) => {
           const isDone = !!completedSteps[step.id];
           return (
-            <div key={step.id} className="timeline-segment" style={{ position: "relative", marginBottom: "4rem" }}>
-              {/* Visual Node */}
-              <div style={{
-                position: "absolute",
-                left: "calc(-3.5rem + 7px)",
-                top: "0.5rem",
-                width: "18px",
-                height: "18px",
-                borderRadius: "50%",
-                background: isDone ? "var(--accent-success)" : "var(--brand-primary)",
-                boxShadow: isDone ? "0 0 20px var(--accent-success)" : "0 0 20px var(--brand-primary)",
-                zIndex: 10,
-                border: "4px solid var(--bg-main)"
-              }}></div>
+            <div key={step.id} className="timeline-step">
+              <div className={`timeline-node ${isDone ? "done" : "pending"}`} />
 
-              <article key={step.id} className="timeline-item">
-                <div className="timeline-marker">
-                  {isDone ? <CheckCircle2 size={20} /> : <Circle size={18} />}
+              <section className={`timeline-card ${isDone ? "is-complete" : ""}`}>
+                <div className="timeline-head">
+                  <div className="timeline-title">
+                    <input
+                      type="checkbox"
+                      checked={isDone}
+                      onChange={() => handleToggleStep(step.id)}
+                      aria-label={`Mark ${step.title} complete`}
+                    />
+                    <div>
+                      <h3>{step.title}</h3>
+                      <span className="timeline-category">{step.category}</span>
+                    </div>
+                  </div>
+                  <span className="status-pill">{step.timeline}</span>
                 </div>
 
-                <section className={`timeline-card ${isDone ? "is-complete" : ""}`}>
-                  <div className="timeline-head">
-                    <div className="timeline-title">
-                      <input
-                        type="checkbox"
-                        checked={isDone}
-                        onChange={() => handleToggleStep(step.id)}
-                        aria-label={`Mark ${step.title} complete`}
-                      />
-                      <div>
-                        <h3>{step.title}</h3>
-                        <span className="timeline-category">{step.category}</span>
-                      </div>
-                    </div>
-                    <span className="status-pill">{step.timeline}</span>
+                <p className="timeline-desc">{step.description}</p>
+
+                {step.placementRelevance && (
+                  <div className="placement-note">
+                    <TrendingUp size={14} />
+                    <p><strong>Placement:</strong> {step.placementRelevance}</p>
                   </div>
+                )}
 
-                  <p style={{ color: "var(--text-secondary)", fontSize: "1.05rem", lineHeight: "1.7", marginBottom: "2rem" }}>{step.description}</p>
+                {step.skills?.length > 0 && (
+                  <div className="skill-tags">
+                    <span className="tag-label">Skills to acquire ({step.skills.length})</span>
+                    {step.skills.map(skill => (
+                      <span key={skill} className="skill-tag">{skill}</span>
+                    ))}
+                  </div>
+                )}
 
-                  {step.placementRelevance && (
-                    <div style={{ marginBottom: "1.5rem", padding: "0.75rem", background: "rgba(76, 175, 80, 0.08)", borderRadius: "6px", borderLeft: "2px solid var(--accent-success)" }}>
-                      <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", margin: 0 }}>
-                        <strong>📈 Placement Relevance:</strong> {step.placementRelevance}
-                      </p>
-                    </div>
-                  )}
-
-                  {step.skills && (
-                    <div
-                      className="skill-matrix-mini"
-                      style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}
-                    >
-                      {step.skills.map(skill => (
-                        <span
-                          key={skill}
-                          style={{
-                            padding: "0.5rem 1rem",
-                            borderRadius: "10px",
-                            background: "rgba(255,255,255,0.03)",
-                            border: "1px solid var(--border-subtle)",
-                            fontSize: "0.85rem"
-                          }}
-                        >
-                          #{skill}
-                        </span>
+                {step.deliverables?.length > 0 && (
+                  <div className="deliverables-list">
+                    <span className="deliverable-label">Deliverables</span>
+                    <ul>
+                      {step.deliverables.map((d, i) => (
+                        <li key={i}>{d}</li>
                       ))}
-                    </div>
-                  )}
-                  <div className="btn-row" style={{ justifyContent: "center", marginTop: 28 }}>
-                    <button onClick={() => window.print()} className="btn btn-primary">
-                      <FileDown size={18} />
-                      Export printable report
-                    </button>
-
-                    <Link href="/skills" className="btn btn-secondary">
-                      <ClipboardList size={18} />
-                      Edit acquired skills
-                    </Link>
+                    </ul>
                   </div>
-                </section>
-              </article>
+                )}
+
+                <div className="timeline-footer">
+                  <Link href="/skills" className="btn btn-secondary">
+                    <ClipboardList size={15} />
+                    Edit skills
+                  </Link>
+                  <button onClick={() => window.print()} className="btn btn-primary">
+                    <FileDown size={15} />
+                    Export
+                  </button>
+                </div>
+              </section>
             </div>
           );
         })}
